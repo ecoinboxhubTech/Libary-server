@@ -1,7 +1,7 @@
 """Typo-tolerant catalogue search (SRCH-1..4). Uses Pinecone for semantic search when configured;
 falls back to RapidFuzz fuzzy matching otherwise."""
 from rapidfuzz import fuzz, process
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Copy, SearchLog, Title
@@ -9,6 +9,7 @@ from ..serializers import availability_map, title_out
 from . import vector_store
 
 FUZZY_CUTOFF = 68
+SORTS = ("title", "year_desc", "year_asc", "newest")  # anything else keeps relevance order
 
 
 def _filtered_ids_stmt(f: dict):
@@ -24,13 +25,14 @@ def _filtered_ids_stmt(f: dict):
     if f.get("year"):
         stmt = stmt.where(Title.year == f["year"])
     if f.get("available_only"):
-        stmt = stmt.where(exists().where(Copy.title_id == Title.id, Copy.status == "available",
-                                         Copy.collection != "reference_only"))
+        stmt = stmt.where(or_(Title.is_digital.is_(True),
+                              exists().where(Copy.title_id == Title.id, Copy.status == "available",
+                                             Copy.collection != "reference_only")))
     return stmt
 
 
 def search_titles(db: Session, q: str | None, filters: dict, page: int, page_size: int,
-                  member_id: int | None = None) -> dict:
+                  member_id: int | None = None, sort: str | None = None) -> dict:
     q = (q or "").strip().lower()
 
     if q and vector_store.is_configured():
@@ -42,22 +44,34 @@ def search_titles(db: Session, q: str | None, filters: dict, page: int, page_siz
                     Copy.status == "available",
                     Copy.collection != "reference_only",
                 )
-            ))
+            )) | set(db.scalars(select(Title.id).where(Title.id.in_(ids), Title.is_digital.is_(True))))
             ids = [i for i in ids if i in avail_set]
     elif q:
         stmt = _filtered_ids_stmt(filters)
         rows = db.execute(stmt).all()
         texts = {tid: text for tid, text in rows}
         hits = process.extract(q, texts, scorer=fuzz.WRatio, score_cutoff=FUZZY_CUTOFF, limit=300)
+        scores = {tid: score for _, score, tid in hits}
+        for tid, text in texts.items():  # a short query ("port") scores low against a long record; still include it
+            if q in text:
+                scores.setdefault(tid, 70)
         ranked = []
-        for text, score, tid in hits:
-            bonus = 20 if q in text else 0  # exact phrase / ISBN / call-number matches rise to the top
+        for tid, score in scores.items():
+            bonus = 20 if q in texts[tid] else 0  # exact phrase / ISBN / call-number matches rise to the top
             ranked.append((score + bonus, tid))
         ranked.sort(key=lambda x: -x[0])
         ids = [tid for _, tid in ranked]
     else:
         stmt = _filtered_ids_stmt(filters)
         ids = [tid for (tid, _) in db.execute(stmt.order_by(Title.title)).all()]
+
+    if sort in SORTS and ids:
+        meta = {r.id: r for r in db.execute(select(Title.id, Title.title, Title.year, Title.created_at)
+                                            .where(Title.id.in_(ids)))}
+        keys = {"title": lambda i: meta[i].title.lower(),
+                "year_desc": lambda i: -(meta[i].year or 0), "year_asc": lambda i: meta[i].year or 9999,
+                "newest": lambda i: -meta[i].created_at.timestamp()}
+        ids = sorted(ids, key=keys[sort])  # stable, so relevance order breaks ties
 
     total = len(ids)
     if q and page == 1:  # SRCH-5: keep a record of searches, especially empty ones

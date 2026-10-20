@@ -143,7 +143,7 @@ class SuggestIn(BaseModel):
 
 
 @router.post("/catalogue-suggest")
-async def catalogue_suggest(body: SuggestIn, _: Member = Depends(require_roles("cataloguer", "head_librarian")),
+async def catalogue_suggest(body: SuggestIn, _: Member = Depends(require_roles("cataloguer", "head_librarian", "admin")),
                             member: Member = Depends(_rate_limit)):
     """Suggests classification fields for a new record. The cataloguer always reviews before saving."""
     answer = await _ask([

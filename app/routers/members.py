@@ -2,14 +2,16 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import MEMBER_STATUSES, MEMBER_TYPES, ROLES, STAFF_ROLES, Member
+from ..models import (MEMBER_STATUSES, MEMBER_TYPES, ROLES, STAFF_ROLES, AuditLog, Hold, Institution, LedgerEntry,
+                      Loan, LoanRequest, Member, PaymentRequest, ReturnRequest)
 from ..security import any_staff, current_member, hash_password, require_roles
-from ..serializers import member_out, member_summary
+from ..serializers import hold_out, iso, ledger_out, loan_out, member_out, member_summary
 from ..services import circulation as circ
+from ..services import settings_store
 from ..services.audit import audit, snap
 from ..timeutil import utcnow
 from .files import read_rows
@@ -167,6 +169,46 @@ def lookup(id_number: str, _: Member = Depends(require_roles("circulation", "hea
     if not m:
         raise HTTPException(404, "No member found with that ID number.")
     return member_summary(db, m, utcnow())
+
+
+@router.get("/{member_id}")
+def member_detail(member_id: int, _: Member = Depends(any_staff), db: Session = Depends(get_db)):
+    """Everything about one member: profile, institution, loans (current and past), holds, fines and pending requests."""
+    m = db.get(Member, member_id)
+    if not m:
+        raise HTTPException(404, "Member not found.")
+    now, cfg = utcnow(), settings_store.get_all(db)
+    loans = db.scalars(select(Loan).where(Loan.member_id == m.id).order_by(Loan.issued_at.desc())).all()
+    current = sorted((l for l in loans if not l.returned_at), key=lambda l: l.due_at)
+    history = [l for l in loans if l.returned_at]
+    holds = db.scalars(select(Hold).where(Hold.member_id == m.id, Hold.status.in_(["queued", "ready"]))).all()
+    ledger = db.scalars(select(LedgerEntry).where(LedgerEntry.member_id == m.id).order_by(LedgerEntry.id.desc())).all()
+    inst = db.get(Institution, m.institution_id) if m.institution_id else None
+    last_login = db.scalar(select(func.max(AuditLog.created_at)).where(AuditLog.actor_id == m.id, AuditLog.action == "auth.login"))
+    # local import avoids a circular dependency with the approvals router
+    from .approvals import loan_request_out, payment_request_out, return_request_out
+
+    def pending(model, out):
+        return [out(r) for r in db.scalars(select(model).where(model.member_id == m.id, model.status == "pending")
+                                           .order_by(model.id))]
+
+    return {
+        "member": {**member_out(m), "created_at": iso(m.created_at), "last_login": iso(last_login),
+                   "locked_until": iso(m.locked_until)},
+        "institution": ({"id": inst.id, "code": inst.code, "name": inst.name, "status": inst.status} if inst else None),
+        "stats": {"loans_total": len(loans), "loans_open": len(current), "loans_returned": len(history),
+                  "overdue": sum(1 for l in current if now > l.due_at), "holds_active": len(holds),
+                  "fines_owed": max(0, circ.member_balance(db, m.id)),
+                  "total_paid": sum(e.amount for e in ledger if e.kind == "payment"), "loan_limit": cfg["max_items"].get(m.member_type, 1)},
+        "blocks": circ.compute_blocks(db, m, cfg, now),
+        "loans": [loan_out(l, now, cfg) for l in current],
+        "loan_history": [loan_out(l, now, cfg) for l in history[:100]],
+        "holds": [hold_out(db, h) for h in holds],
+        "ledger": [ledger_out(e) for e in ledger[:100]],
+        "pending_requests": {"loans": pending(LoanRequest, loan_request_out),
+                             "returns": pending(ReturnRequest, return_request_out),
+                             "payments": pending(PaymentRequest, payment_request_out)},
+    }
 
 
 @router.patch("/{member_id}")

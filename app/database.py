@@ -29,6 +29,40 @@ class Base(DeclarativeBase):
     pass
 
 
+# (table, column, DDL type) added after the first deployment. create_all() never alters existing tables.
+NEW_COLUMNS = [
+    ("members", "institution_id", "INTEGER REFERENCES institutions(id)"),
+    ("titles", "slug", "VARCHAR(120)"),
+    ("titles", "topics", "JSON"),
+    ("titles", "is_digital", "BOOLEAN DEFAULT FALSE"),
+    ("titles", "repository_path", "VARCHAR(300)"),
+    ("titles", "quote", "VARCHAR(400)"),
+    ("titles", "course", "VARCHAR(80)"),
+    ("titles", "lecturer", "VARCHAR(120)"),
+    ("titles", "pages", "INTEGER"),
+    ("payments", "authorization_url", "VARCHAR(300)"),
+    ("webhook_events", "next_attempt_at", "TIMESTAMP"),
+    ("loans", "collection_point", "VARCHAR(30)"),
+    ("loans", "checkout_id", "VARCHAR(20) REFERENCES checkouts(id)"),
+]
+NEW_INDEXES = [
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_titles_slug ON titles (slug)",
+    "CREATE INDEX IF NOT EXISTS ix_members_institution_id ON members (institution_id)",
+    "CREATE INDEX IF NOT EXISTS ix_loans_checkout_id ON loans (checkout_id)",
+]
+
+
+def ensure_columns() -> None:
+    from sqlalchemy import inspect, text
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, ddl in NEW_COLUMNS:
+            if column not in {c["name"] for c in insp.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        for stmt in NEW_INDEXES:
+            conn.execute(text(stmt))
+
+
 def get_db():
     db = SessionLocal()
     try:

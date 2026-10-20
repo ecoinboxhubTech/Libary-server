@@ -8,11 +8,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
 from .config import get_config
-from .database import Base, SessionLocal, engine
+from .database import Base, SessionLocal, engine, ensure_columns
 from .models import Member, Title
-from .routers import admin, ai, auth, catalogue, circulation, fines, members, reports
+from . import api_v1
+from .routers import admin, ai, approvals, auth, catalogue, circulation, ebooks, fines, institutions, members, partner, reports
 from .security import client_ip, hash_password
-from .services import vector_store
+from .services import checkout, payment_flow, vector_store, webhooks
 from .services.audit import request_ip
 from .services.notifications import dispatch_pending_emails
 
@@ -59,10 +60,17 @@ def _pinecone_sync() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)  # fine for a prototype; adopt Alembic before the schema changes in production
+    ensure_columns()
     bootstrap_admin()
     if cfg.seed_demo_data:
-        from .seed import seed_demo
+        from .seed import seed_approvals, seed_demo, seed_ebooks, seed_institutions
         seed_demo()
+        seed_institutions()
+        seed_approvals()
+        seed_ebooks()
+    from .slugs import backfill_slugs
+    with SessionLocal() as db:
+        backfill_slugs(db)
     if vector_store.is_configured():
         threading.Thread(target=_pinecone_sync, daemon=True).start()
     scheduler = None
@@ -70,6 +78,9 @@ async def lifespan(app: FastAPI):
         scheduler = BackgroundScheduler(timezone="Africa/Lagos")
         scheduler.add_job(admin.run_jobs_once, "interval", hours=3, id="daily-jobs")
         scheduler.add_job(_email_tick, "interval", minutes=2, id="email-dispatch")
+        scheduler.add_job(checkout.expire_job, "interval", minutes=1, id="checkout-expiry")
+        scheduler.add_job(webhooks.retry_job, "interval", minutes=1, id="webhook-retry")
+        scheduler.add_job(payment_flow.abandon_job, "interval", hours=1, id="payment-abandon")
         scheduler.start()
     yield
     if scheduler:
@@ -92,8 +103,10 @@ async def remember_ip(request: Request, call_next):
         request_ip.reset(token)
 
 
-for module in (auth, members, catalogue, circulation, fines, reports, ai, admin):
+for module in (auth, members, catalogue, circulation, fines, reports, ai, admin, institutions, partner, approvals, ebooks):
     app.include_router(module.router, prefix="/api")
+app.include_router(partner.sandbox, prefix="/api")
+api_v1.install(app)
 
 
 @app.get("/api/health", tags=["system"])

@@ -12,7 +12,7 @@ from ..services.audit import audit, snap
 from .files import csv_response_body, read_rows
 
 router = APIRouter(prefix="/catalogue", tags=["catalogue"])
-CATALOGUER = require_roles("cataloguer", "head_librarian")
+CATALOGUER = require_roles("cataloguer", "head_librarian", "admin")
 TITLE_FIELDS = ["title", "subtitle", "authors", "edition", "publisher", "year", "isbn", "subjects", "subject_area",
                 "call_number", "language", "department", "format", "description"]
 

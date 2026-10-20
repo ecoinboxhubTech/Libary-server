@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..models import CHARGE_KINDS, CREDIT_KINDS, Copy, Hold, LedgerEntry, Loan, Member, Title
+from ..models import CHARGE_KINDS, CREDIT_KINDS, Copy, Hold, Institution, LedgerEntry, Loan, Member, Title
 from ..timeutil import parse_hhmm, to_wat, utcnow, wat_date, wat_to_utc
 from . import settings_store
 from .audit import audit
@@ -96,6 +96,11 @@ def compute_blocks(db: Session, member: Member, cfg: dict, now: datetime, *, for
         blocks.append({"code": "inactive", "message": f"Membership is {member.status}", "overridable": False})
     if member.expires_on and member.expires_on < now:
         blocks.append({"code": "expired", "message": "Membership has expired", "overridable": False})
+    if member.institution_id:
+        inst = db.get(Institution, member.institution_id)
+        if inst and inst.status != "approved":
+            blocks.append({"code": "institution_inactive", "overridable": False,
+                           "message": f"Your institution's library access is {inst.status}"})
     owed = max(0, member_balance(db, member.id))
     if owed > cfg["fine_block_threshold"]:
         blocks.append({"code": "fines", "overridable": True,
@@ -176,9 +181,8 @@ def return_copy(db: Session, copy: Copy, officer: Member, *, condition: str = "o
     return {"loan": loan, "fine": fine, "hold": hold, "copy_status": copy.status}
 
 
-def renew(db: Session, loan: Loan, actor: Member, now: datetime | None = None) -> Loan:
-    now = now or utcnow()
-    cfg = settings_store.get_all(db)
+def check_renewable(db: Session, loan: Loan, now: datetime, cfg: dict) -> None:
+    """Raises RuleError when the loan cannot be renewed. Changes nothing."""
     member, copy = loan.member, loan.copy
     if loan.returned_at:
         raise RuleError("This loan is already closed", "closed")
@@ -192,8 +196,15 @@ def renew(db: Session, loan: Loan, actor: Member, now: datetime | None = None) -
                         .where(Hold.title_id == copy.title_id, Hold.status.in_(["queued", "ready"])))
     if waiting:
         raise RuleError("Another member is waiting for this title", "reserved")
-    if any(b["code"] in ("fines", "inactive", "expired") for b in compute_blocks(db, member, cfg, now, for_issue=False)):
+    if any(b["code"] in ("fines", "inactive", "expired", "institution_inactive") for b in compute_blocks(db, member, cfg, now, for_issue=False)):
         raise RuleError("Renewal blocked: please clear fines or contact the library", "blocked")
+
+
+def renew(db: Session, loan: Loan, actor: Member, now: datetime | None = None) -> Loan:
+    now = now or utcnow()
+    cfg = settings_store.get_all(db)
+    member, copy = loan.member, loan.copy
+    check_renewable(db, loan, now, cfg)
 
     before = {"due_at": loan.due_at, "renewals": loan.renewals}
     loan.due_at = compute_due(now, member.member_type, copy.collection, cfg)

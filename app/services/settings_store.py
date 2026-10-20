@@ -20,7 +20,14 @@ DEFAULTS: dict = {
     "fine_block_threshold": 1000,         # BR-10 placeholder
     "overdue_block_days": 14,             # BR-10
     "hold_pickup_hours": 48,              # BR-11
-    "max_holds": 3,                       # RES-6
+    "max_holds": 3,
+    "checkout_hold_minutes": 30,          # how long a basket keeps its copies while payment is pending (confirm)
+    "checkout_periods": [7, 14],          # loan periods the storefront may request (confirm)
+    "payment_min_kobo": 5000,             # minimum online payment, N50
+    "payment_fee_percent": 1.5,           # sandbox fee model; confirm with the real provider
+    "payment_fee_flat_kobo": 10000,       # added to the percentage for amounts >= payment_fee_threshold_kobo
+    "payment_fee_threshold_kobo": 250000,
+    "payment_fee_cap_kobo": 200000,                       # RES-6
     "replacement_fee": 500,               # BR-12 placeholder
     "reminder_days_after_due": [-2, 0, 1, 7, 14],  # NOT-1
     "templates": {
@@ -39,6 +46,26 @@ DEFAULTS: dict = {
                         "body": "Hello {name}, a fine has been added for '{title}'. Current amount: {amount}."},
         "renewed": {"subject": "Renewed: '{title}'",
                     "body": "Hello {name}, '{title}' has been renewed. New due date: {due_date}."},
+        "loan_approved": {"subject": "Loan approved: '{title}'",
+                          "body": "Hello {name}, your request for '{title}' was approved. Collect it at the desk. Due date: {due_date}."},
+        "loan_rejected": {"subject": "Loan request declined: '{title}'",
+                          "body": "Hello {name}, your request for '{title}' was declined. Reason: {reason}"},
+        "return_confirmed": {"subject": "Return confirmed: '{title}'",
+                             "body": "Hello {name}, the library confirmed the return of '{title}'. Fine on this loan: {amount}."},
+        "return_rejected": {"subject": "Return not confirmed: '{title}'",
+                            "body": "Hello {name}, we could not confirm the return of '{title}'. Reason: {reason}"},
+        "payment_approved": {"subject": "Payment approved",
+                             "body": "Hello {name}, your payment of {amount} (receipt {receipt}) was approved."},
+        "payment_rejected": {"subject": "Payment not approved",
+                             "body": "Hello {name}, your payment of {amount} (receipt {receipt}) was not approved. Reason: {reason}"},
+        "payment_refunded": {"subject": "Payment refunded",
+                             "body": "Hello {name}, your payment {reference} of {amount} was refunded. The fines it covered are open again."},
+        "payment_late": {"subject": "Late payment needs attention: {reference}",
+                         "body": "Hello {name}, payment {reference} of {amount} for {member} arrived after its checkout expired. "
+                                 "It was credited to the member's account; no loans were issued."},
+        "checkout_failed": {"subject": "Checkout could not be completed: {reference}",
+                            "body": "Hello {name}, payment {reference} of {amount} for {member} succeeded but the loans could not "
+                                    "be issued ({reason}). The payment is credited to the member's account."},
         "password_reset": {"subject": "Your library password reset code",
                            "body": "Hello {name}, your one-time code is {code}. It expires in 15 minutes."},
     },

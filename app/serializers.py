@@ -19,7 +19,7 @@ def member_out(m: Member) -> dict:
         "programme": m.programme, "level": m.level, "department": m.department, "phone": m.phone,
         "email": m.email, "status": m.status, "expires_on": iso(m.expires_on),
         "must_change_password": m.must_change_password, "consented": m.consent_at is not None,
-        "activated": m.password_hash is not None,
+        "activated": m.password_hash is not None, "institution_id": m.institution_id,
     }
 
 

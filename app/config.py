@@ -27,6 +27,13 @@ class Config(BaseSettings):
     pinecone_api_key: str = ""
     pinecone_index: str = "nitt-library"
 
+    app_base_url: str = "http://localhost:5173"
+    payment_provider: str = "sandbox"  # sandbox | paystack | remita
+    payment_secret_key: str = ""
+    payment_public_key: str = "pk_test_nitt_sandbox"
+    sandbox_delay: bool = True  # 0.5-1.5s pause on sandbox charges so the UI shows its loading states
+    webhook_secret: str = ""  # HMAC-SHA512 key for incoming webhooks; never sent to the browser
+
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
@@ -42,6 +49,16 @@ class Config(BaseSettings):
         elif url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+psycopg://", 1)
         return url
+
+    @property
+    def webhook_signing_key(self) -> str:
+        """HMAC key for webhook signatures. Empty means every webhook is rejected. The sandbox derives one in
+        development so it works out of the box; production must set WEBHOOK_SECRET."""
+        if self.webhook_secret:
+            return self.webhook_secret
+        if self.payment_provider == "sandbox" and self.app_env != "production":
+            return "sandbox-" + self.secret_key
+        return ""
 
     @property
     def origins(self) -> list[str]:

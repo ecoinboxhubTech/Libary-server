@@ -3,7 +3,7 @@ import tempfile
 
 _tmp = tempfile.mkdtemp()
 os.environ.update(DATABASE_URL=f"sqlite:///{_tmp}/test.db", SEED_DEMO_DATA="true", RUN_SCHEDULER="false",
-                  XAI_API_KEY="", SECRET_KEY="test-secret-key-that-is-long-enough-for-hs256")
+                  XAI_API_KEY="", SANDBOX_DELAY="false", SECRET_KEY="test-secret-key-that-is-long-enough-for-hs256")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
